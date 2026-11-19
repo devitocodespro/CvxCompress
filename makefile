@@ -111,10 +111,46 @@ test_async_overlap_3d: tests/test_async_overlap_3d.cpp $(HIP_TEST_HEADER) hip/hi
 bench_encode_full: tests/bench_encode_full.cpp $(HIP_TEST_HEADER) hip/hipCompress.cpp $(HIP_API_HEADERS) | $(BUILDDIR)
 	$(HIPCC) $(HIPCFLAGS) $(HIP_OFFLOAD) -mllvm -unroll-threshold=10000 -I. -Ihip -Itests tests/bench_encode_full.cpp hip/hipCompress.cpp -lm -o $(BUILDDIR)/bench_encode_full
 
+# ---------------------------------------------------------------------------
+# CUDA library and tests
+# ---------------------------------------------------------------------------
+
+NVCC ?= nvcc
+NVCCFLAGS ?= -O3
+CUDA_DIR = CvxCompress-CUDA
+CUDA_BUILDDIR = $(BUILDDIR)/cvxcompress-cuda
+CUDA_INCLUDES = -I$(CUDA_DIR)/include -I$(CUDA_DIR)/src
+CUDA_OBJECTS = $(addprefix $(CUDA_DIR)/,src/CvxCompress_CUDA.o src/CvxCompress_CUDA_helpers.o \
+	io/Read_Raw_Volume.o io/Write_Raw_Volume.o)
+
+libcudacvxcompress.$(LIB_EXT): $(CUDA_OBJECTS)
+	$(NVCC) -shared -o $@ $(CUDA_OBJECTS)
+
+$(CUDA_DIR)/src/CvxCompress_CUDA.o: $(CUDA_DIR)/src/CvxCompress_CUDA_helpers.cuh \
+	$(CUDA_DIR)/include/CvxCompress_CUDA.hxx $(wildcard $(CUDA_DIR)/include/Common/*.h)
+
+$(CUDA_DIR)/src/CvxCompress_CUDA_helpers.o: $(addprefix $(CUDA_DIR)/src/,CvxCompress_CUDA_kernels.cu \
+	Wavelet_Transform_16.cu Run_Length_Encoding.cu) $(CUDA_DIR)/include/Run_Length_Escape_Codes.hxx
+
+$(CUDA_DIR)/src/%.o: $(CUDA_DIR)/src/%.cu
+	$(NVCC) $(NVCCFLAGS) -std=c++17 -lineinfo --maxrregcount=64 -Xcompiler=-fPIC $(CUDA_INCLUDES) -c $< -o $@
+
+$(CUDA_DIR)/io/%.o: $(CUDA_DIR)/io/%.cpp $(CUDA_DIR)/include/IO/%.hxx
+	$(CXX) -O3 -std=c++17 -fPIC $(CUDA_INCLUDES) -c $< -o $@
+
+.PHONY: cmake-cvxcompress-cuda test-cvxcompress-cuda
+cmake-cvxcompress-cuda:
+	cmake -S $(CUDA_DIR) -B $(CUDA_BUILDDIR) -DCVXCOMPRESS_CUDA_BUILD_TESTS=ON $(CUDA_CMAKE_FLAGS)
+	cmake --build $(CUDA_BUILDDIR)
+
+test-cvxcompress-cuda: cmake-cvxcompress-cuda
+	ctest --test-dir $(CUDA_BUILDDIR) --output-on-failure
+
 clean:
 	rm -f *.o
 	rm -f libcvxcompress.$(LIB_EXT) CvxCompress_Test CvxCompress_Test_Dyn CvxCompress_GenCode Test_Compression Compress_SEAM_Basin Test_With_Generated_Input
 	rm -f Ds79_Base.cpp Us79_Base.cpp
 	rm -f hip/*.o
 	rm -f libhipcvxcompress.$(LIB_EXT)
+	rm -f $(CUDA_OBJECTS) libcudacvxcompress.$(LIB_EXT)
 	rm -rf $(BUILDDIR)
